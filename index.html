@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Litematica RCE - Servux Protocol Path Traversal</title>
+    <meta name="description" content="Technical writeup of a path traversal vulnerability in Litematica's Servux network protocol allowing arbitrary file write and remote code execution.">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-inner">
+            <div class="nav-links">
+                <a href="#summary" data-lang="en">Summary</a>
+                <a href="#summary" data-lang="ru" hidden>Кратко</a>
+                <a href="#technical" data-lang="en">Technical</a>
+                <a href="#technical" data-lang="ru" hidden>Техническая сторона</a>
+                <a href="#impact" data-lang="en">Impact</a>
+                <a href="#impact" data-lang="ru" hidden>Последствия</a>
+                <a href="#timeline" data-lang="en">Timeline</a>
+                <a href="#timeline" data-lang="ru" hidden>Хронология</a>
+                <a href="#writeup" data-lang="en">This Writeup</a>
+                <a href="#writeup" data-lang="ru" hidden>Мой анализ</a>
+            </div>
+            <div class="lang-toggle">
+                <button id="lang-en" class="lang-btn active">EN</button>
+                <button id="lang-ru" class="lang-btn">RU</button>
+            </div>
+        </div>
+    </nav>
+
+    <header id="summary">
+        <div class="header-content">
+            <h1 data-lang="en">Path Traversal in <span class="highlight">Litematica</span> via Servux Protocol</h1>
+            <h1 data-lang="ru" hidden>Path Traversal в <span class="highlight">Litematica</span> через протокол Servux</h1>
+            <p class="subtitle" data-lang="en">A malicious Minecraft server can write arbitrary files to a client's filesystem - leading to remote code execution - by exploiting unvalidated <code>FileName</code> fields in Litematica's NBT-based network protocol.</p>
+            <p class="subtitle" data-lang="ru" hidden>Злонамеренный Minecraft-сервер может записывать произвольные файлы в файловую систему клиента - что приводит к удаленному выполнению кода - используя непроверенные поля <code>FileName</code> в NBT-сетевом протоколе Litematica.</p>
+            <div class="meta-row">
+                <span data-lang="en">Discovered by: <a href="https://discord.gg/bukkit" target="_blank">数字 & Nightwane</a></span>
+                <span data-lang="ru" hidden>Обнаружено: <a href="https://discord.gg/bukkit" target="_blank">数字 & Nightwane</a></span>
+                <span data-lang="en">Writeup and PoC by: <a href="https://github.com/AliensToEarth" target="_blank">AliensToEarth</a></span>
+                <span data-lang="ru" hidden>Автор Анализа и PoC: <a href="https://github.com/AliensToEarth" target="_blank">AliensToEarth</a></span>
+                <span data-lang="en">Target: Litematica + Servux (Fabric)</span>
+                <span data-lang="ru" hidden>Цель: Litematica + Servux (Fabric)</span>
+                <span data-lang="en">Severity: <span class="critical">Critical</span></span>
+                <span data-lang="ru" hidden>Серьезность: <span class="critical">Критическая</span></span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section id="technical">
+            <h2 data-lang="en">Technical Analysis</h2>
+            <h2 data-lang="ru" hidden>Технический анализ</h2>
+
+            <div class="card">
+                <h3 data-lang="en">The Vulnerability</h3>
+                <h3 data-lang="ru" hidden>Уязвимость</h3>
+                <p data-lang="en">Litematica's Servux protocol uses a custom plugin channel (<code>servux:litematics</code>) to transfer litematic schematics from server to client. The protocol transmits NBT-compound messages over Netty with a <code>FileName</code> field that specifies where on the client's filesystem the received data should be written.</p>
+                <p data-lang="ru" hidden>Протокол Servux в Litematica использует кастомный плагин-канал (<code>servux:litematics</code>) для передачи схематиков litematic с сервера клиенту. Протокол передает NBT-compound сообщения через Netty с полем <code>FileName</code>, которое указывает, куда в файловой системе клиента должны быть записаны полученные данные.</p>
+                <p data-lang="en"><strong>The flaw:</strong> the <code>FileName</code> value is never sanitized. By supplying <code>../../mods/payload.jar</code>, an attacker can traverse out of the intended <code>.minecraft/litematics/</code> directory and write a file anywhere the Minecraft client process can write - most critically into the <code>mods/</code> folder.</p>
+                <p data-lang="ru" hidden><strong>Проблема:</strong> значение <code>FileName</code> никогда не проверяется. Указав <code>../../mods/payload.jar</code>, атакующий может выйти за пределы директории <code>.minecraft/litematics/</code> и записать файл куда угодно - критичнее всего в папку <code>mods/</code>.</p>
+            </div>
+
+            <div class="card">
+                <h3 data-lang="en">Protocol Walkthrough</h3>
+                <h3 data-lang="ru" hidden>Разбор протокола</h3>
+                <p data-lang="en">The exploit uses three NBT messages sent over the <code>servux:litematics</code> channel. The server wraps each message in a compound with <code>type=11</code> (the NBT response type the client expects for litematic transfers):</p>
+                <p data-lang="ru" hidden>Эксплойт использует три NBT-сообщения, отправляемых через канал <code>servux:litematics</code>. Сервер оборачивает каждое сообщение в compound с <code>type=11</code> (тип NBT-ответа, который клиент ожидает для передачи litematic):</p>
+
+                <div class="code-header">TransmitStart</div>
+                <pre><code class="nbt">{
+  "Task": "Litematic-TransmitStart",
+  "SliceKey": &lt;random_long&gt;,
+  "FileName": "../../mods/poc.litematic.jar",
+  "FileType": "litematic",
+  "TotalSlices": 1,
+  "TotalSize": &lt;payload_size&gt;
+}</code></pre>
+
+                <div class="code-header">TransmitData</div>
+                <pre><code class="nbt">{
+  "Task": "Litematic-TransmitData",
+  "SliceKey": &lt;same_key&gt;,
+  "Slice": 0,
+  "Size": &lt;payload_size&gt;,
+  "Data": &lt;raw_jar_bytes&gt;
+}</code></pre>
+
+                <div class="code-header">TransmitEnd</div>
+                <pre><code class="nbt">{
+  "Task": "Litematic-TransmitEnd",
+  "SliceKey": &lt;same_key&gt;,
+  "TotalSize": &lt;payload_size&gt;,
+  "TotalSlices": 1
+}</code></pre>
+            </div>
+
+            <div class="card">
+                <h3 data-lang="en">Wire Format</h3>
+                <h3 data-lang="ru" hidden>Формат передачи</h3>
+                <p data-lang="en">Each message is wrapped in a type-length-value structure before being sent over the Fabric networking API:</p>
+                <p data-lang="ru" hidden>Каждое сообщение обернуто в структуру type-length-value перед отправкой через Fabric networking API:</p>
+                <pre><code>[VarInt total_length]
+  [VarInt NBT_RESPONSE_DATA_TYPE (11)]
+    [VarInt nbt_length]
+    [NBT Compound]</code></pre>
+                <p data-lang="en">The receiving Litematica client reads the type discriminator (<code>11</code>), dispatches to its NBT handler, which parses the compound and - upon seeing <code>TransmitStart</code> - creates a file output stream at the path constructed from <code>FileName</code> without any path traversal checks.</p>
+                <p data-lang="ru" hidden>Клиент Litematica читает дискриминатор типа (<code>11</code>), передает NBT-обработчику, который парсит compound и - увидев <code>TransmitStart</code> - создает файловый поток вывода по пути из <code>FileName</code> без каких-либо проверок path traversal.</p>
+            </div>
+
+            <div class="card">
+                <h3 data-lang="en">Attack Flow</h3>
+                <h3 data-lang="ru" hidden>Схема атаки</h3>
+                <ol class="flow-list">
+                    <li data-lang="en"><strong>Join server</strong> - the exploit mod (running on the server) hooks <code>ServerPlayConnectionEvents.JOIN</code> and waits 3 seconds (60 ticks).</li>
+                    <li data-lang="ru" hidden><strong>Подключение</strong> - эксплойт-мод (на сервере) перехватывает <code>ServerPlayConnectionEvents.JOIN</code> и ждет 3 секунды (60 тиков).</li>
+                    <li data-lang="en"><strong>Send Start</strong> - a <code>TransmitStart</code> packet is sent with <code>FileName = "../../mods/malicious.jar"</code>.</li>
+                    <li data-lang="ru" hidden><strong>Отправка Start</strong> - пакет <code>TransmitStart</code> отправляется с <code>FileName = "../../mods/malicious.jar"</code>.</li>
+                    <li data-lang="en"><strong>Send Data</strong> - after a 2-tick delay, the raw bytes of a malicious Fabric mod are transmitted as the <code>Data</code> field.</li>
+                    <li data-lang="ru" hidden><strong>Отправка Data</strong> - через 2 тика передаются сырые байты вредоносного Fabric-мода в поле <code>Data</code>.</li>
+                    <li data-lang="en"><strong>Send End</strong> - after another 2 ticks, a <code>TransmitEnd</code> finalizes the transfer. The client closes the file handle.</li>
+                    <li data-lang="ru" hidden><strong>Отправка End</strong> - еще через 2 тика <code>TransmitEnd</code> завершает передачу. Клиент закрывает файловый дескриптор.</li>
+                    <li data-lang="en"><strong>RCE</strong> - the malicious <code>.jar</code> now resides in the victim's <code>mods/</code> folder. On the next restart, arbitrary code executes in the Minecraft client process.</li>
+                    <li data-lang="ru" hidden><strong>RCE</strong> - вредоносный <code>.jar</code> теперь в папке <code>mods/</code> жертвы. При следующем перезапуске произвольный код выполняется в процессе Minecraft-клиента.</li>
+                </ol>
+            </div>
+        </section>
+
+        <section id="impact">
+            <h2 data-lang="en">Impact</h2>
+            <h2 data-lang="ru" hidden>Последствия</h2>
+            <div class="impact-grid">
+                <div class="impact-card critical">
+                    <h4 data-lang="en">Arbitrary File Write</h4>
+                    <h4 data-lang="ru" hidden>Произвольная запись</h4>
+                    <p data-lang="en">Lets an attacker drop a malicious mod jar into the client's <code>mods/</code> folder. On next game restart the code executes in the client process - full remote code execution, no additional steps needed.</p>
+                    <p data-lang="ru" hidden>Позволяет атакующему поместить вредоносный jar-мод в папку <code>mods/</code> клиента. При следующем перезапуске код выполняется в процессе клиента - полное удаленное выполнение кода без дополнительных действий.</p>
+                </div>
+                <div class="impact-card medium">
+                    <h4 data-lang="en">Stealth</h4>
+                    <h4 data-lang="ru" hidden>Скрытность</h4>
+                    <p data-lang="en">The file transfer happens over the legitimate <code>servux:litematics</code> plugin channel. The victim sees nothing more than a brief Litematica popup saying the received file is in the wrong format - a few seconds of visual noise that most players will ignore or forget immediately.</p>
+                    <p data-lang="ru" hidden>Передача файла происходит через легитимный плагин-канал <code>servux:litematics</code>. Жертва видит лишь короткое всплывающее окно Litematica о неверном формате файла - несколько секунд визуального шума, который большинство игроков проигнорируют или сразу забудут.</p>
+                </div>
+            </div>
+            <h3 data-lang="en">Affected Versions</h3>
+            <h3 data-lang="ru" hidden>Затронутые версии</h3>
+            <div class="card affected">
+                <div class="version-list">
+                    <div class="version-item broken">
+                        <span class="version-name">Litematica</span>
+                        <span class="version-detail" data-lang="en">All versions using Servux protocol with NBT-based litematic transfer. Path traversal in FileName field.</span>
+                        <span class="version-detail" data-lang="ru" hidden>Все версии, использующие протокол Servux с NBT-передачей litematic. Path Traversal в поле FileName.</span>
+                    </div>
+                    <div class="version-item broken">
+                        <span class="version-name">Servux</span>
+                        <span class="version-detail" data-lang="en">The networking layer does not validate incoming FileName values before passing them to the file writer.</span>
+                        <span class="version-detail" data-lang="ru" hidden>Сетевой слой не проверяет входящие значения FileName перед передачей их в файловый writer.</span>
+                    </div>
+                    <div class="version-item fixed">
+                        <span class="version-name" data-lang="en">Fix</span>
+                        <span class="version-name" data-lang="ru" hidden>Исправление</span>
+                        <span class="version-detail" data-lang="en">Committed in <a href="https://github.com/sakura-ryoko/litematica/commit/728116fb4d2b5b0bb445b6627372b3b22f93cb10" target="_blank"><code>728116fb</code></a> - the vulnerable <code>FileName</code> field is removed from transmit packets. The entire file-slicing transmission path (<code>sliceForServux</code>, <code>sendTransmitFile</code>) is deprecated and disabled. All users should update to <code>0.28.3-sakura.3</code> or later.</span>
+                        <span class="version-detail" data-lang="ru" hidden>Зафиксировано в <a href="https://github.com/sakura-ryoko/litematica/commit/728116fb4d2b5b0bb445b6627372b3b22f93cb10" target="_blank"><code>728116fb</code></a> - уязвимое поле <code>FileName</code> удалено из пакетов передачи. Весь механизм файловой нарезки (<code>sliceForServux</code>, <code>sendTransmitFile</code>) объявлен устаревшим и отключен. Всем пользователям следует обновиться до <code>0.28.3-sakura.3</code> или новее.</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="timeline">
+            <h2 data-lang="en">Timeline</h2>
+            <h2 data-lang="ru" hidden>Хронология</h2>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-date">2026-07-05</div>
+                    <div class="timeline-content">
+                        <h4 data-lang="en">Vulnerability Reported & Fixed</h4>
+                        <h4 data-lang="ru" hidden>Уязвимость обнаружена и исправлена</h4>
+                        <p data-lang="en">Members of Autism Inc and DupersUnited - <strong>数字</strong> and <strong>Nightwane</strong> - independently discover the Litematica RCE after investigating a member compromise. They report it to Sakura Ryoko, who commits a fix (<a href="https://github.com/sakura-ryoko/litematica/commit/728116fb4d2b5b0bb445b6627372b3b22f93cb10" target="_blank"><code>728116fb</code></a>) the same evening. <strong>No public announcement is made at this time.</strong></p>
+                        <p data-lang="ru" hidden>Участники Autism Inc и DupersUnited - <strong>数字</strong> и <strong>Nightwane</strong> - независимо обнаружили RCE в Litematica после расследования компрометации участника. Они сообщили об этом Sakura Ryoko, который в тот же вечер зафиксировал исправление (<a href="https://github.com/sakura-ryoko/litematica/commit/728116fb4d2b5b0bb445b6627372b3b22f93cb10" target="_blank"><code>728116fb</code></a>). <strong>Публичных объявлений в это время не было.</strong></p>
+                        <p data-lang="en">Sakura Ryoko's commit removes the <code>FileName</code> field from transmit packets entirely; the file-slicing machinery behind the path traversal (<code>sliceForServux</code>, <code>sendTransmitFile</code>) is deprecated and disabled. The commit is pushed <strong>without any public announcement</strong>.</p>
+                        <p data-lang="ru" hidden>Коммит Sakura Ryoko полностью удаляет поле <code>FileName</code> из пакетов передачи; механизм файловой нарезки (<code>sliceForServux</code>, <code>sendTransmitFile</code>) объявлен устаревшим и отключен. Коммит запушен <strong>без публичного объявления</strong>.</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-date">2026-07-06, 19:51</div>
+                    <div class="timeline-content">
+                        <h4 data-lang="en">Autism Inc Publishes Warning</h4>
+                        <h4 data-lang="ru" hidden>Autism Inc публикует предупреждение</h4>
+                        <p data-lang="en"><a href="https://discord.gg/bukkit" target="_blank">Autism Inc</a> posts a public warning detailing the RCE, how a "bad actor" in the duping community had been exploiting it to deploy RATs, and that the vulnerability was independently found by <strong>数字</strong> and <strong>Nightwane</strong> after investigating an incident where a member was compromised. The post links the exploit to the same individual behind a prior Meteor RCE campaign.</p>
+                        <p data-lang="ru" hidden><a href="https://discord.gg/bukkit" target="_blank">Autism Inc</a> публикует публичное предупреждение с описанием RCE, как «bad actor» из дюп-сообщества эксплуатировал ее для установки RAT, и что уязвимость была независимо найдена <strong>数字</strong> и <strong>Nightwane</strong> после расследования инцидента с компрометацией участника. В посте эксплойт связывается с тем же лицом, стоящим за предыдущей Meteor RCE-кампанией.</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-date">2026-07-06</div>
+                    <div class="timeline-content">
+                        <h4 data-lang="en">Silent Commit Discovered</h4>
+                        <h4 data-lang="ru" hidden>Тихий коммит обнаружен</h4>
+                        <p data-lang="en"><strong>I</strong>, upon hearing rumors of the exploit, began investigating. I noticed the silent fix commit in Litematica's repository. After reverse engineering the fix and tracing it back to the vulnerable code path, I independently developed a working proof-of-concept exploit - a Fabric server-side mod that sends crafted NBT payloads to write arbitrary files via the path traversal.</p>
+                        <p data-lang="ru" hidden><strong>Я</strong>, услышав слухи об эксплойте, начал расследование. Я заметил тихий фикс-коммит в репозитории Litematica. После реверса патча и отслеживания уязвимого кода я независимо разработал рабочий proof-of-concept эксплойт - Fabric-мод на стороне сервера, отправляющий сформированные NBT-нагрузки для записи произвольных файлов через path traversal.</p>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-date">2026-07-06, 23:30</div>
+                    <div class="timeline-content">
+                        <h4 data-lang="en">Developer Announces Fix</h4>
+                        <h4 data-lang="ru" hidden>Разработчик объявляет об исправлении</h4>
+                        <p data-lang="en"><strong>Sakura Ryoko</strong> (Litematica developer) posts a public <code>@everyone</code> announcement in the official <a href="https://discord.gg/2FgywHj" target="_blank">MasaModding Discord server</a>. Confirms that the vulnerability was brought to their attention by <strong>unfair.advantage</strong> (<code>@528586172558082059</code>) and <strong>shinxiolio</strong> (<code>@1416317364865335357</code>) from Autism Inc and DupersUnited. Details the affected version range (MC 1.21+, introduced in <code>1.21.5-0.22.2-sakura.4</code> on 19 May 2025, backported to several branches on 31 Dec 2025) and lists all fixed releases.</p>
+                        <p data-lang="ru" hidden><strong>Sakura Ryoko</strong> (разработчик Litematica) публикует объявление <code>@everyone</code> на официальном <a href="https://discord.gg/2FgywHj" target="_blank">MasaModding Discord-сервере</a>. Подтверждает, что уязвимость была доведена до их сведения <strong>unfair.advantage</strong> (<code>@528586172558082059</code>) и <strong>shinxiolio</strong> (<code>@1416317364865335357</code>) из Autism Inc и DupersUnited. Описывает диапазон затронутых версий (MC 1.21+, введено в <code>1.21.5-0.22.2-sakura.4</code> 19 мая 2025, бэкпортировано в несколько веток 31 дек 2025) и перечисляет все исправленные релизы.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="writeup">
+            <h2 data-lang="en">This Writeup</h2>
+            <h2 data-lang="ru" hidden>Мой анализ</h2>
+            <div class="card">
+                <p data-lang="en">This writeup is <strong>not</strong> by the original discoverers. I (<a href="https://github.com/AliensToEarth" target="_blank">AliensToEarth</a>) was not involved in the early finding or reporting the vulnerability. I became aware of the RCE through community chatter and decided to investigate the source code myself. While doing so, I noticed the developer had pushed a fix commit without any public announcement. I reverse engineered the vulnerability from the diff, developed this PoC independently, and am publishing this technical breakdown for the transparency.</p>
+                <p data-lang="ru" hidden>Этот материал <strong>не</strong> от первоначальных исследователей бага. Я (<a href="https://github.com/AliensToEarth" target="_blank">AliensToEarth</a>) не участвовал в первичном поиске или сообщении об уязвимости. Я узнал об RCE через слухи в сообществе и решил самостоятельно исследовать исходный код. В процессе я заметил, что разработчик запушил фикс-коммит без публичного объявления. Я произвел реверс уязвимости из diff, независимо разработал этот PoC и публикую технический разбор для прозрачности.</p>
+                <p data-lang="en">The original vulnerability was found and responsibly disclosed by <strong>数字</strong> and <strong>Nightwane</strong> from Autism Inc / DupersUnited, who coordinated with the developer to get it patched. The public <code>@everyone</code> announcement was made by Sakura Ryoko on 2026-07-06 at 23:30 UTC+4.</p>
+                <p data-lang="ru" hidden>Оригинальная уязвимость была найдена и ответственно раскрыта <strong>数字</strong> и <strong>Nightwane</strong> из Autism Inc / DupersUnited, которые скоординировались с разработчиком для ее исправления. Публичное объявление <code>@everyone</code> было сделано Sakura Ryoko 2026-07-06 в 23:30 UTC+4.</p>
+                <p data-lang="en">The proof-of-concept code for this writeup is available in the <a href="https://github.com/AliensToEarth/litematica-rce" target="_blank">PoC repository</a>.</p>
+                <p data-lang="ru" hidden>Proof-of-concept код доступен в <a href="https://github.com/AliensToEarth/litematica-rce" target="_blank">PoC-репозитории</a>.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p data-lang="en">This writeup is provided for educational purposes.</p>
+        <p data-lang="ru" hidden>Этот материал предоставлен в образовательных целях.</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
